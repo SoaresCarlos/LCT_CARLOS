@@ -3,76 +3,103 @@ import time
 import csv
 import matplotlib.pyplot as plt
 
-# Configurações da comunicação serial
-ser = serial.Serial('COM3', 9600)  # Ajuste 'COM3' conforme sua porta
-time.sleep(2)  # Espera a inicialização do Arduino
-
-# Parâmetros do experimento
+# Configurações do experimento
 FonteAlimentacao = 5.0  # Fonte de alimentação do aquecedor
-Amplitudes = [2.5, 4.5]  # Tensões desejadas (2 valores para testar)
+Amplitude = [2.5, 4.0, 0.0, 3.0, 5.0]  # Tensão desejada
 TempoAmostragem = 600  # Tempo total de amostragem (em segundos)
 NumeroAmostras = 600  # Quantidade de amostras (1 por segundo)
-AmostrasPWM = NumeroAmostras // len(Amplitudes)  # Divisão das amostras para cada valor de amplitude
+AmostrasPWM = int(NumeroAmostras / len(Amplitude))  # Tempo de funcionamento para cada amplitude
 
-# Criação de listas para armazenar dados para os gráficos
-tempos = []
-temperaturas = []
-pwm_values = []
+# Configurações de comunicação serial com o Arduino
+ser = serial.Serial('COM12', 9600)  # Altere 'COM3' para a porta correta
+time.sleep(2)  # Aguarda a inicialização da comunicação
 
-# Inicializa a plotagem em tempo real
+# Função para enviar PWM ao Arduino
+def enviar_pwm(pwm):
+    ser.write(f"{pwm}\n".encode())
+
+# Função para ler a temperatura enviada pelo Arduino
+def ler_temperatura():
+    linha = ser.readline().decode().strip()
+    try:
+        # Se houver texto como 'Calibracao concluida', removemos essa parte
+        if 'Calibracao concluida' in linha:
+            linha = linha.replace('Calibracao concluida', '').strip()  # Remove a parte textual
+        temperatura = float(linha)  # Tenta converter o restante para float
+    except ValueError:
+        print(f"Recebido um dado não numérico: {linha}")
+        temperatura = None
+    return temperatura
+
+# Configurações dos gráficos
 plt.ion()
-fig, (ax1, ax2) = plt.subplots(2, 1)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), constrained_layout=True)
 
-# Abre o arquivo CSV para salvar os dados
-with open('dados_coletados.csv', mode='w', newline='') as file:
-    writer = csv.writer(file, delimiter=';')
-    writer.writerow(["Amostra", "Tempo (s)", "PWM", "Temperatura (°C)"])
+x_vals = []
+temperatura_vals = []
+pwm_vals = []
 
-    # Loop para coletar e plotar dados
-    for i in range(NumeroAmostras):
-        # Determina qual valor de Amplitude será usado no momento
-        amplitude_index = i // AmostrasPWM
-        if amplitude_index >= len(Amplitudes):
-            amplitude_index = len(Amplitudes) - 1  # Se ultrapassar, mantém a última amplitude
-        AmplitudeAtual = Amplitudes[amplitude_index]
+# Salva os dados em um arquivo CSV
+with open('dados_experimento.csv', 'w', newline='') as csvfile:
+    writer = csv.writer(csvfile, delimiter=';')
+    writer.writerow(['Amostra', 'Tempo (s)', 'PWM', 'Temperatura (°C)'])
 
-        # Calcula o PWM correspondente à amplitude atual
-        PWMInjetado = int((255 / FonteAlimentacao) * AmplitudeAtual)
-        
-        # Envia o valor de PWM para o Arduino
-        ser.write(f"{PWMInjetado}\n".encode())
+    try:
+        for i in range(NumeroAmostras):
+            # Calcula o tempo atual
+            tempo = i * (TempoAmostragem / NumeroAmostras)
 
-        # Lê a temperatura do Arduino
-        if ser.in_waiting > 0:
-            temperatura = float(ser.readline().decode().strip())
-            tempo = i  # O tempo é o índice atual do loop (1 amostra por segundo)
+            # Define o PWM com base nas amplitudes
+            index_amplitude = i // AmostrasPWM
+            if index_amplitude >= len(Amplitude):
+                index_amplitude = len(Amplitude) - 1
+            PWMInjetado = int((255 / FonteAlimentacao) * Amplitude[index_amplitude])
+            enviar_pwm(PWMInjetado)
 
-            # Armazena os dados
-            tempos.append(tempo)
-            temperaturas.append(temperatura)
-            pwm_values.append(PWMInjetado)
+            # Lê a temperatura do Arduino
+            temperatura = ler_temperatura()
 
             # Print dos valores no terminal
-            print(f"Amostra: {i+1}, Tempo: {tempo}s, PWM: {PWMInjetado}, Temperatura: {temperatura}°C")
+            if temperatura is not None:
+                print(f"Amostra: {i + 1}, Tempo: {tempo}s, PWM: {PWMInjetado}, Temperatura: {temperatura}°C")
 
-            # Salva os dados no arquivo CSV
-            writer.writerow([i+1, tempo, PWMInjetado, temperatura])
+                # Salva os dados no arquivo CSV
+                writer.writerow([i + 1, tempo, PWMInjetado, temperatura])
 
-            # Atualiza os gráficos
-            ax1.clear()
-            ax2.clear()
-            ax1.plot(tempos, temperaturas, label='Temperatura (°C)')
-            ax2.plot(tempos, pwm_values, label='PWM')
+                # Atualiza os valores para os gráficos
+                x_vals.append(tempo)
+                temperatura_vals.append(temperatura)
+                pwm_vals.append(PWMInjetado)
 
-            ax1.set_title('Temperatura vs Tempo')
-            ax2.set_title('PWM vs Tempo')
-            ax1.set_xlabel('Tempo (s)')
-            ax2.set_xlabel('Tempo (s)')
-            ax1.set_ylabel('Temperatura (°C)')
-            ax2.set_ylabel('PWM')
-            ax1.legend()
-            ax2.legend()
+                # Atualiza os gráficos em tempo real
+                ax1.clear()
+                ax1.plot(x_vals, temperatura_vals, label='Temperatura (°C)', color='red')
+                ax1.set_title('Temperatura vs. Tempo')
+                ax1.set_xlabel('Tempo (s)')
+                ax1.set_ylabel('Temperatura (°C)')
+                ax1.legend()
 
-            plt.pause(0.1)  # Pequena pausa para atualizar os gráficos em tempo real
+                ax2.clear()
+                ax2.plot(x_vals, pwm_vals, label='PWM', color='blue')
+                ax2.set_title('PWM vs. Tempo')
+                ax2.set_xlabel('Tempo (s)')
+                ax2.set_ylabel('PWM')
+                ax2.legend()
 
-ser.close()
+                # Ajuste de layout para evitar sobreposição
+                plt.tight_layout(pad=2.0)
+
+                plt.pause(0.01)
+
+    except KeyboardInterrupt:
+        print("Experimento interrompido manualmente.")
+
+    finally:
+        # Desliga o aquecedor ao finalizar o experimento
+        print("Encerrando experimento. Desligando aquecedores.")
+        enviar_pwm(0)  # Envia PWM = 0 para desligar o aquecedor
+        ser.close()  # Fecha a conexão serial
+
+# Mantém o gráfico aberto ao final do experimento
+plt.ioff()
+plt.show()
